@@ -5,26 +5,26 @@ Utility Functions
 ==================================================
 """
 
-import os
 import uuid
 import shutil
 from pathlib import Path
+from fastapi import UploadFile
 
 from config import (
     ALLOWED_EXTENSIONS,
-    MAX_FILE_SIZE,
-    UPLOAD_FOLDER,
-    RESULT_FOLDER
+    MAX_UPLOAD_SIZE,
+    UPLOAD_DIR,
+    RESULT_DIR
 )
 
 
 # ==================================================
-# FILE VALIDATION
+# VALIDATE FILE EXTENSION
 # ==================================================
 
 def is_allowed_file(filename: str) -> bool:
     """
-    Check if uploaded file extension is allowed.
+    Check if file extension is allowed.
     """
 
     extension = Path(filename).suffix.lower()
@@ -33,44 +33,44 @@ def is_allowed_file(filename: str) -> bool:
 
 
 # ==================================================
-# FILE SIZE VALIDATION
+# VALIDATE FILE SIZE
 # ==================================================
 
-def validate_file_size(size: int) -> bool:
+def is_valid_size(size: int) -> bool:
     """
-    Validate uploaded file size.
+    Check upload size.
     """
 
-    return size <= MAX_FILE_SIZE
+    return size <= MAX_UPLOAD_SIZE
 
 
 # ==================================================
-# RANDOM FILE NAME
+# GENERATE UNIQUE NAME
 # ==================================================
 
-def generate_filename(original_name: str) -> str:
+def generate_filename(filename: str) -> str:
     """
-    Generate unique filename.
+    Create random filename.
     """
 
-    extension = Path(original_name).suffix.lower()
+    extension = Path(filename).suffix.lower()
 
     return f"{uuid.uuid4().hex}{extension}"
 
 
 # ==================================================
-# SAVE UPLOADED FILE
+# SAVE FILE
 # ==================================================
 
-def save_upload(upload_file, filename: str) -> Path:
+def save_upload_file(file: UploadFile, filename: str) -> Path:
     """
-    Save uploaded file.
+    Save uploaded image.
     """
 
-    destination = UPLOAD_FOLDER / filename
+    destination = UPLOAD_DIR / filename
 
     with destination.open("wb") as buffer:
-        shutil.copyfileobj(upload_file.file, buffer)
+        shutil.copyfileobj(file.file, buffer)
 
     return destination
 
@@ -79,12 +79,12 @@ def save_upload(upload_file, filename: str) -> Path:
 # RESULT PATH
 # ==================================================
 
-def result_path(filename: str) -> Path:
+def get_result_path(filename: str) -> Path:
     """
-    Result image path.
+    Result image location.
     """
 
-    return RESULT_FOLDER / filename
+    return RESULT_DIR / filename
 
 
 # ==================================================
@@ -92,9 +92,6 @@ def result_path(filename: str) -> Path:
 # ==================================================
 
 def file_exists(path: Path) -> bool:
-    """
-    Check file exists.
-    """
 
     return path.exists()
 
@@ -104,9 +101,6 @@ def file_exists(path: Path) -> bool:
 # ==================================================
 
 def delete_file(path: Path):
-    """
-    Delete file safely.
-    """
 
     try:
 
@@ -120,12 +114,13 @@ def delete_file(path: Path):
 
 
 # ==================================================
-# CLEAN TEMP FILES
+# CLEANUP PLACEHOLDER
 # ==================================================
 
-def cleanup():
+def cleanup_old_files():
+
     """
-    Placeholder for automatic cleanup.
+    Future automatic cleanup.
     """
 
     return True
