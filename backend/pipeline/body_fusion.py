@@ -6,10 +6,8 @@ import mediapipe as mp
 from typing import List, Tuple, Dict
 
 mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
 
-# Define body regions as sets of landmark indices (MediaPipe Pose)
-# https://google.github.io/mediapipe/solutions/pose.html
+# Landmark indices for body regions (MediaPipe Pose)
 REGIONS = {
     "face": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     "neck": [11, 12, 23, 24],
@@ -21,19 +19,16 @@ REGIONS = {
 }
 
 def get_landmarks(image: np.ndarray):
-    """Detect pose landmarks using MediaPipe. Returns (landmarks, image_rgb)."""
+    """Detect pose landmarks. Returns list of landmarks or None."""
     with mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5) as pose:
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         results = pose.process(rgb)
         if not results.pose_landmarks:
-            return None, rgb
-        return results.pose_landmarks.landmark, rgb
+            return None
+        return results.pose_landmarks.landmark
 
-def get_region_mask(image_shape: Tuple[int, int], landmarks, region_indices: List[int]) -> np.ndarray:
-    """
-    Create a binary mask for a given region defined by landmark indices.
-    We approximate the region as a convex hull of those landmarks.
-    """
+def get_region_mask(image_shape, landmarks, region_indices):
+    """Create a binary mask for a region defined by convex hull of keypoints."""
     h, w = image_shape[:2]
     points = []
     for idx in region_indices:
@@ -47,134 +42,132 @@ def get_region_mask(image_shape: Tuple[int, int], landmarks, region_indices: Lis
     return mask
 
 def compute_region_sharpness(image: np.ndarray, mask: np.ndarray) -> float:
-    """Compute Laplacian variance only within the masked region."""
+    """Laplacian variance only inside the mask."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     laplacian = cv2.Laplacian(gray, cv2.CV_64F)
     masked = laplacian * (mask / 255.0)
-    # variance over non‑zero pixels
     valid = mask > 0
     if np.sum(valid) == 0:
         return 0.0
-    region_values = masked[valid]
-    return float(np.var(region_values))
+    return float(np.var(masked[valid]))
 
-def align_image_to_base(img: np.ndarray, base_landmarks, img_landmarks) -> np.ndarray:
+def align_image_to_base(img, src_landmarks, dst_landmarks, dst_shape):
     """
-    Align `img` to `base` using affine transform based on shoulders and hips.
-    Use landmarks 11,12 (shoulders) and 23,24 (hips) for 4 corresponding points.
+    Align `img` to the base image coordinate system using affine transform
+    based on shoulders (11,12) and hips (23,24).
+    Returns (aligned_img, affine_matrix).
     """
-    # Corresponding points: shoulders and hips
+    h, w = img.shape[:2]
+    dst_h, dst_w = dst_shape
     src_pts = []
     dst_pts = []
-    h, w = img.shape[:2]
-    base_h, base_w = base_landmarks[0].image_shape  # we need to store shape
-
     for idx in [11, 12, 23, 24]:
-        lm_src = img_landmarks[idx]
-        lm_dst = base_landmarks[idx]
-        src_pts.append([lm_src.x * w, lm_src.y * h])
-        dst_pts.append([lm_dst.x * base_w, lm_dst.y * base_h])
-
+        src_lm = src_landmarks[idx]
+        dst_lm = dst_landmarks[idx]
+        src_pts.append([src_lm.x * w, src_lm.y * h])
+        dst_pts.append([dst_lm.x * dst_w, dst_lm.y * dst_h])
     src_pts = np.array(src_pts, dtype=np.float32)
     dst_pts = np.array(dst_pts, dtype=np.float32)
 
-    # Estimate affine transform
     M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
     if M is None:
-        # Fallback to identity
-        return img
-    aligned = cv2.warpAffine(img, M, (base_w, base_h), borderMode=cv2.BORDER_REPLICATE)
-    return aligned
+        # fallback to identity
+        M = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+    aligned = cv2.warpAffine(img, M, (dst_w, dst_h), borderMode=cv2.BORDER_REPLICATE)
+    return aligned, M
+
+def warp_mask(mask: np.ndarray, M: np.ndarray, dst_shape: Tuple[int, int]) -> np.ndarray:
+    """Warp a mask using the same affine transform."""
+    dst_h, dst_w = dst_shape
+    warped = cv2.warpAffine(mask, M, (dst_w, dst_h), borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    return warped
 
 def fuse_best_parts(image_paths: List[str]) -> str:
     """
-    Load all images, detect pose, compute per‑region sharpness,
-    align all images to the one with best overall sharpness,
-    then blend the highest‑sharpness region from each image into the base.
+    Load images, detect pose, score each region by sharpness,
+    align the best region to the base image, and blend using Poisson blending.
     """
-    # Load images and get landmarks
+    # Load all images and their landmarks
     images = []
     landmarks_list = []
-    shapes = []
     for path in image_paths:
         img = cv2.imread(path)
         if img is None:
             continue
+        lm = get_landmarks(img)
+        if lm is None:
+            continue
         images.append(img)
-        landmarks, _ = get_landmarks(img)
-        if landmarks is None:
-            raise ValueError(f"Could not detect pose in {path}")
-        landmarks_list.append(landmarks)
-        shapes.append(img.shape[:2])
+        landmarks_list.append(lm)
 
-    if len(images) < 1:
-        raise ValueError("No valid images.")
+    if len(images) == 0:
+        raise ValueError("No valid images with detectable pose.")
 
     # Choose base image: the one with highest overall sharpness
-    overall_scores = [variance_of_laplacian(img) for img in images]
+    overall_scores = [cv2.Laplacian(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+                      for img in images]
     base_idx = np.argmax(overall_scores)
     base_img = images[base_idx].copy()
     base_landmarks = landmarks_list[base_idx]
-    base_h, base_w = shapes[base_idx]
+    base_shape = base_img.shape[:2]
 
-    # For each region, find best image and its score
+    # For each region, find the best image (max sharpness) and its mask
     best_region_scores = {region: -1 for region in REGIONS}
-    best_region_images = {region: None for region in REGIONS}
+    best_region_img_idx = {region: None for region in REGIONS}
     best_region_masks = {region: None for region in REGIONS}
+    best_region_landmarks = {region: None for region in REGIONS}
 
-    # We'll compute masks for base and all images, then compare.
-    # To save time, we compute masks for all images per region, then score.
-    masks = []  # list of dict region->mask
-    for i, (img, lm) in enumerate(zip(images, landmarks_list)):
+    # Pre-compute masks for all images and regions
+    masks_all = []
+    for lm in landmarks_list:
         region_masks = {}
         for region, idxs in REGIONS.items():
-            mask = get_region_mask(img.shape, lm, idxs)
-            region_masks[region] = mask
-        masks.append(region_masks)
+            region_masks[region] = get_region_mask(base_shape, lm, idxs)
+        masks_all.append(region_masks)
 
-    # For each region, compute sharpness for each image (only within that region)
     for region in REGIONS:
         for i, img in enumerate(images):
-            mask = masks[i][region]
+            mask = masks_all[i][region]
             score = compute_region_sharpness(img, mask)
             if score > best_region_scores[region]:
                 best_region_scores[region] = score
-                best_region_images[region] = i
+                best_region_img_idx[region] = i
                 best_region_masks[region] = mask
+                best_region_landmarks[region] = landmarks_list[i]
 
-    # Now we have the best image index per region.
-    # Create a composite: start with base image.
+    # Start with a copy of the base image
     composite = base_img.copy()
 
-    # For each region, if best image is not base, align that image to base, then blend using mask.
-    for region, best_idx in best_region_images.items():
+    # For each region, if the best is not the base, align and blend
+    for region, best_idx in best_region_img_idx.items():
         if best_idx is None or best_idx == base_idx:
             continue
-        # Align the best image to base
-        aligned_img = align_image_to_base(images[best_idx], base_landmarks, landmarks_list[best_idx])
-        # Get mask for this region on base coordinates – we need mask from aligned image?
-        # We can compute mask on base using base_landmarks, but the region shape may differ.
-        # Instead, we warp the mask from best image to base using same transform.
-        # We already have affine matrix from align_image_to_base, but we didn't return it.
-        # For simplicity, we'll compute mask on base directly using base_landmarks, which is an approximation.
-        # Better: transform the mask.
-        # Let's implement a function to warp mask:
-        # Re‑compute affine and warp mask.
-        # We'll refactor align_image_to_base to also return the transform matrix.
-        # For brevity, I'll show the idea; you can implement properly.
 
-        # For now, we just use base mask for that region.
-        mask = masks[base_idx][region]  # approximate
-        # Blend: put aligned_img pixels where mask is 1
-        mask_3ch = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR) / 255.0
-        composite = (composite * (1 - mask_3ch) + aligned_img * mask_3ch).astype(np.uint8)
+        src_img = images[best_idx]
+        src_lm = best_region_landmarks[region]
+        src_mask = best_region_masks[region]  # in base coordinates (we pre-computed using base shape, but that's an approximation)
 
-    # Save composite
+        # More accurate: align the source image to base, then warp the mask (computed on source) accordingly.
+        # We'll compute the mask on source image coordinates first.
+        src_mask_original = get_region_mask(src_img.shape, src_lm, REGIONS[region])
+        aligned_src, M = align_image_to_base(src_img, src_lm, base_landmarks, base_shape)
+        # Warp the mask using the same transform
+        aligned_mask = warp_mask(src_mask_original, M, base_shape)
+
+        # Use Poisson blending to insert aligned_src into composite using aligned_mask
+        # cv2.seamlessClone requires the mask to be a binary mask, and we need the center of the mask
+        # Find the bounding box of the mask to get center
+        y_indices, x_indices = np.where(aligned_mask > 0)
+        if len(y_indices) == 0:
+            continue
+        center = (int(np.mean(x_indices)), int(np.mean(y_indices)))
+        # Ensure mask is 3-channel for seamlessClone (it expects 3-channel mask)
+        mask_3ch = cv2.cvtColor(aligned_mask, cv2.COLOR_GRAY2BGR)
+        # Poisson blending
+        composite = cv2.seamlessClone(aligned_src, composite, mask_3ch, center, cv2.NORMAL_CLONE)
+
+    # Save result
     out_fd, out_path = tempfile.mkstemp(suffix=".jpg")
     os.close(out_fd)
     cv2.imwrite(out_path, composite)
     return out_path
-
-def variance_of_laplacian(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    return cv2.Laplacian(gray, cv2.CV_64F).var()
