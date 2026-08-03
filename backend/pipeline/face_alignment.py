@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 from typing import Tuple, Dict, Any, Optional
@@ -6,11 +7,23 @@ class FaceAlignerDetector:
     """Detects facial landmarks and aligns face features vertically."""
 
     def __init__(self):
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        eye_cascade_path = cv2.data.haarcascades + 'haarcascade_eye.xml'
-        
-        self.face_cascade = cv2.CascadeClassifier(cascade_path)
-        self.eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
+        # Safe way to resolve haarcascades paths without crashing on Render/Headless
+        cascade_dir = getattr(cv2, 'data', None)
+        if cascade_dir and hasattr(cascade_dir, 'haarcascades'):
+            base_path = cascade_dir.haarcascades
+            face_path = os.path.join(base_path, 'haarcascade_frontalface_default.xml')
+            eye_path = os.path.join(base_path, 'haarcascade_eye.xml')
+        else:
+            # Fallback path using cv2.samples if cv2.data is missing
+            try:
+                face_path = cv2.samples.findFile('haarcascades/haarcascade_frontalface_default.xml')
+                eye_path = cv2.samples.findFile('haarcascades/haarcascade_eye.xml')
+            except Exception:
+                face_path = 'haarcascade_frontalface_default.xml'
+                eye_path = 'haarcascade_eye.xml'
+
+        self.face_cascade = cv2.CascadeClassifier(face_path)
+        self.eye_cascade = cv2.CascadeClassifier(eye_path)
 
     def process(self, image_path: str) -> Tuple[np.ndarray, Dict[str, Any]]:
         image = cv2.imread(image_path)
@@ -18,6 +31,11 @@ class FaceAlignerDetector:
             raise ValueError(f"Unable to read image at {image_path}")
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Check if cascade loaded properly before calling detectMultiScale
+        if self.face_cascade.empty():
+            return image, {"faces_detected": 0, "face_area_ratio": 0.0, "aligned": False, "error": "Face cascade failed to load"}
+
         faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
 
         face_count = len(faces)
@@ -33,7 +51,10 @@ class FaceAlignerDetector:
 
         # Face Eye Alignment check
         face_roi_gray = gray[y:y+h, x:x+w]
-        eyes = self.eye_cascade.detectMultiScale(face_roi_gray)
+        
+        eyes = []
+        if not self.eye_cascade.empty():
+            eyes = self.eye_cascade.detectMultiScale(face_roi_gray)
 
         aligned_image = image.copy()
         aligned = False
@@ -47,7 +68,7 @@ class FaceAlignerDetector:
             # Calculate rotation angle
             dy = e2_center[1] - e1_center[1]
             dx = e2_center[0] - e1_center[0]
-            angle = np.degrees(np.arctan2(dy, dx))
+            angle = float(np.degrees(np.arctan2(dy, dx)))
 
             # Rotate image to level eyes
             if abs(angle) > 1.0 and abs(angle) < 45.0:
