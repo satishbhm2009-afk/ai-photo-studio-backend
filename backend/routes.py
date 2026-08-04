@@ -5,7 +5,7 @@ import base64
 import cv2
 from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Form
 from fastapi.responses import Response, JSONResponse
-from backend.pipeline.processing import extract_best_frames_with_scores
+from backend.pipeline.processing import process_video_pipeline
 from backend.pipeline.body_fusion import fuse_best_parts
 
 router = APIRouter()
@@ -22,8 +22,9 @@ async def extract_top_frames(
             shutil.copyfileobj(video.file, tmp)
             tmp_path = tmp.name
 
-        frame_results = extract_best_frames_with_scores(
-            tmp_path,
+        # Run the full pipeline
+        frame_results = process_video_pipeline(
+            video_path=tmp_path,
             num_frames=num_frames,
             prompt=prompt,
             enhance=enhance
