@@ -4,11 +4,12 @@ from backend.routes import router
 
 app = FastAPI(title="AI Photo Studio Pro")
 
-# CORS – allow all for testing (restrict in production)
+# CORS – allow all origins (no credentials required)
+# This fixes the "CORS Missing Allow Origin" error.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"],          # Allows any frontend domain
+    allow_credentials=False,      # Set to False because "*" cannot be used with True
     allow_methods=["*"],
     allow_headers=["*"],
 )
