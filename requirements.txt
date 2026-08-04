@@ -7,3 +7,7 @@ python-multipart==0.0.9
 aiofiles==23.2.1
 pydantic==2.7.4
 mediapipe==0.10.14
+transformers==4.46.3
+torch==2.5.0
+sentencepiece==0.2.0
+protobuf==3.20.3
