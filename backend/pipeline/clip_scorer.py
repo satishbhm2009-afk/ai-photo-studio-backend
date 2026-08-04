@@ -15,13 +15,10 @@ class CLIPScorer:
             self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
     def score(self, image, text_prompt):
-        """
-        Returns similarity score between image and text (0‑1).
-        """
         if not text_prompt or not text_prompt.strip():
             return 0.0
 
-        self._load()  # load model only if needed
+        self._load() # <-- Model loads here, only when needed
 
         pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         inputs = self.processor(text=[text_prompt], images=pil_img, return_tensors="pt", padding=True)
