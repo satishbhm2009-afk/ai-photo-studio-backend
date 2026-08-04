@@ -8,128 +8,104 @@ mp_face_mesh = mp.solutions.face_mesh
 
 class FaceScorer:
     def __init__(self):
-        self.face_detection = mp_face_detection.FaceDetection(
-            model_selection=0, min_detection_confidence=0.5
-        )
-        self.face_mesh = mp_face_mesh.FaceMesh(
-            static_image_mode=True,
-            max_num_faces=1,
-            min_detection_confidence=0.5
-        )
+        self.detection = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
+        self.mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, min_detection_confidence=0.5)
 
-    def score_frame(self, image: np.ndarray) -> Tuple[float, Optional[np.ndarray]]:
-        # 1. Sharpness
-        sharpness = variance_of_laplacian(image)
-        sharpness_score = min(sharpness / 500.0, 1.0) * 100
+        # Face Mesh landmark indices
+        self.LEFT_EYE = [33, 133, 160, 158, 144, 153]
+        self.RIGHT_EYE = [362, 263, 387, 385, 380, 373]
+        self.MOUTH = [61, 291, 13, 14]
 
-        # 2. Brightness
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        brightness = np.mean(gray)
-        if 80 <= brightness <= 180:
-            brightness_score = 100
-        elif brightness < 80:
-            brightness_score = max(0, (brightness / 80) * 100)
-        else:
-            brightness_score = max(0, 100 - ((brightness - 180) / 75) * 100)
-
-        # 3. Face detection
+    def score(self, image: np.ndarray) -> Tuple[float, Optional[np.ndarray]]:
+        """
+        Returns (quality_score, aligned_image_or_None).
+        Score ranges 0-100 based on face size, eyes open, smile, angle.
+        """
+        h, w = image.shape[:2]
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        detections = self.face_detection.process(rgb)
 
+        # Detect face
+        detections = self.detection.process(rgb)
         if not detections.detections:
-            return sharpness_score * 0.5, None
+            return 0.0, None
 
+        # Take largest face
         detection = max(detections.detections, key=lambda d: 
                         d.location_data.relative_bounding_box.width *
                         d.location_data.relative_bounding_box.height)
         bbox = detection.location_data.relative_bounding_box
-        h, w = image.shape[:2]
-        x = int(bbox.xmin * w)
-        y = int(bbox.ymin * h)
-        face_w = int(bbox.width * w)
-        face_h = int(bbox.height * h)
+        x, y = int(bbox.xmin * w), int(bbox.ymin * h)
+        fw, fh = int(bbox.width * w), int(bbox.height * h)
 
-        face_area_ratio = (face_w * face_h) / (w * h)
-        face_size_score = min(face_area_ratio * 200, 100)
+        # Face size score
+        area_ratio = (fw * fh) / (w * h)
+        size_score = min(area_ratio * 200, 100)
 
-        # 4. Face Mesh
-        mesh_results = self.face_mesh.process(rgb)
+        # Face Mesh for detailed landmarks
+        mesh_results = self.mesh.process(rgb)
         if not mesh_results.multi_face_landmarks:
-            composite = (0.3 * sharpness_score + 0.2 * brightness_score + 0.3 * face_size_score)
-            return composite, self._align_face(image, detection)
+            return size_score * 0.5, self._align_face(image, detection)
 
         landmarks = mesh_results.multi_face_landmarks[0].landmark
 
-        # 5. Eyes open
-        left_ear = self._eye_aspect_ratio(landmarks, [33, 133, 160, 158, 144, 153])
-        right_ear = self._eye_aspect_ratio(landmarks, [362, 263, 387, 385, 380, 373])
+        # Eyes open (EAR)
+        left_ear = self._ear(landmarks, self.LEFT_EYE)
+        right_ear = self._ear(landmarks, self.RIGHT_EYE)
         avg_ear = (left_ear + right_ear) / 2.0
-        eyes_open_score = min(avg_ear * 500, 100)
+        eyes_score = min(avg_ear * 500, 100)
 
-        # 6. Smile
-        smile_ratio = self._mouth_smile_ratio(landmarks)
-        smile_score = min((smile_ratio - 1.2) * 50, 100) if smile_ratio > 1.2 else 0
+        # Smile (width/height ratio)
+        smile = self._smile_ratio(landmarks)
+        smile_score = min((smile - 1.2) * 50, 100) if smile > 1.2 else 0
 
-        # 7. Face angle
-        left_eye = self._landmark_to_pt(landmarks[33])
-        right_eye = self._landmark_to_pt(landmarks[362])
-        dy = right_eye[1] - left_eye[1]
-        dx = right_eye[0] - left_eye[0]
+        # Angle (rotation from eyes)
+        left_pt = self._lm_to_pt(landmarks[33], w, h)
+        right_pt = self._lm_to_pt(landmarks[362], w, h)
+        dy = right_pt[1] - left_pt[1]
+        dx = right_pt[0] - left_pt[0]
         angle = np.degrees(np.arctan2(dy, dx))
         angle_score = max(0, 100 - abs(angle) * 2)
 
-        # Weighted composite
+        # Composite score
         composite = (
-            0.20 * sharpness_score +
-            0.15 * brightness_score +
-            0.20 * face_size_score +
-            0.15 * eyes_open_score +
-            0.20 * smile_score +
-            0.10 * angle_score
+            0.25 * size_score +
+            0.25 * eyes_score +
+            0.30 * smile_score +
+            0.20 * angle_score
         )
 
         aligned = self._align_face(image, detection, angle)
-        return composite, aligned
+        return min(composite, 100), aligned
 
-    # ---- helpers ----
-    def _eye_aspect_ratio(self, landmarks, indices):
-        pts = [self._landmark_to_pt(landmarks[i]) for i in indices]
+    # ---------- Helpers ----------
+    def _lm_to_pt(self, lm, w, h):
+        return np.array([int(lm.x * w), int(lm.y * h)])
+
+    def _ear(self, landmarks, indices):
+        pts = [np.array([landmarks[i].x, landmarks[i].y]) for i in indices]
         v1 = np.linalg.norm(pts[1] - pts[5])
         v2 = np.linalg.norm(pts[2] - pts[4])
-        h = np.linalg.norm(pts[0] - pts[3])
-        return (v1 + v2) / (2.0 * h + 1e-6)
+        h_dist = np.linalg.norm(pts[0] - pts[3])
+        return (v1 + v2) / (2.0 * h_dist + 1e-6)
 
-    def _mouth_smile_ratio(self, landmarks):
-        left = self._landmark_to_pt(landmarks[61])
-        right = self._landmark_to_pt(landmarks[291])
-        top = self._landmark_to_pt(landmarks[13])
-        bottom = self._landmark_to_pt(landmarks[14])
-        width = np.linalg.norm(left - right)
-        height = np.linalg.norm(top - bottom)
-        return width / (height + 1e-6)
-
-    def _landmark_to_pt(self, lm):
-        return np.array([lm.x, lm.y])
+    def _smile_ratio(self, landmarks):
+        left = np.array([landmarks[61].x, landmarks[61].y])
+        right = np.array([landmarks[291].x, landmarks[291].y])
+        top = np.array([landmarks[13].x, landmarks[13].y])
+        bottom = np.array([landmarks[14].x, landmarks[14].y])
+        return np.linalg.norm(left - right) / (np.linalg.norm(top - bottom) + 1e-6)
 
     def _align_face(self, image, detection, angle=None):
+        h, w = image.shape[:2]
         if angle is None:
-            h, w = image.shape[:2]
             bbox = detection.location_data.relative_bounding_box
-            left_eye = (bbox.xmin + 0.2 * bbox.width, bbox.ymin + 0.3 * bbox.height)
-            right_eye = (bbox.xmin + 0.8 * bbox.width, bbox.ymin + 0.3 * bbox.height)
-            left_pt = (int(left_eye[0] * w), int(left_eye[1] * h))
-            right_pt = (int(right_eye[0] * w), int(right_eye[1] * h))
-            dy = right_pt[1] - left_pt[1]
-            dx = right_pt[0] - left_pt[0]
-            angle = np.degrees(np.arctan2(dy, dx))
+            left = (bbox.xmin + 0.2 * bbox.width, bbox.ymin + 0.3 * bbox.height)
+            right = (bbox.xmin + 0.8 * bbox.width, bbox.ymin + 0.3 * bbox.height)
+            lx, ly = int(left[0] * w), int(left[1] * h)
+            rx, ry = int(right[0] * w), int(right[1] * h)
+            angle = np.degrees(np.arctan2(ry - ly, rx - lx))
         if abs(angle) < 1.0:
             return image
-        h, w = image.shape[:2]
-        center = (w//2, h//2)
+        center = (w // 2, h // 2)
         M = cv2.getRotationMatrix2D(center, angle, 1.0)
-        aligned = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-        return aligned
-
-def variance_of_laplacian(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    return cv2.Laplacian(gray, cv2.CV_64F).var()
+        return cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
