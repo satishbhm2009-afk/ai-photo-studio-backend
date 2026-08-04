@@ -4,7 +4,6 @@ from backend.routes import router
 
 app = FastAPI(title="AI Photo Studio")
 
-# CORS – allow all origins for now (update to your domain in production)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,10 +12,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Root health endpoint – prevents Render from restarting due to 404 on /
+# Health check endpoint – prevents Render from restarting
 @app.get("/")
 async def health_check():
     return {"status": "ok", "message": "AI Photo Studio is running"}
 
-# Include all API routes
 app.include_router(router)
