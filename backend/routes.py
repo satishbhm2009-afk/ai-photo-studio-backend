@@ -1,77 +1,63 @@
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request
+from fastapi.responses import JSONResponse, FileResponse
 import os
-import shutil
 import tempfile
-import base64
-import cv2
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Form
-from fastapi.responses import Response, JSONResponse
-from backend.pipeline.processing import process_video_pipeline
-from backend.pipeline.body_fusion import fuse_best_parts
+import shutil
+import logging
+from typing import List
+
+from .pipeline.processing import extract_best_frame  # assume this exists
+from .downloader.social_downloader import SocialMediaDownloader
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-@router.post("/extract-top-frames")
-async def extract_top_frames(
-    video: UploadFile = File(...),
-    num_frames: int = Query(10, ge=1, le=50),
-    prompt: str = Form(""),
-    enhance: bool = Form(False)
-):
+# Existing upload endpoint – keep as is
+@router.post("/upload-video")
+async def upload_video(video: UploadFile = File(...)):
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-            shutil.copyfileobj(video.file, tmp)
-            tmp_path = tmp.name
-
-        # Run the full pipeline
-        frame_results = process_video_pipeline(
-            video_path=tmp_path,
-            num_frames=num_frames,
-            prompt=prompt,
-            enhance=enhance
-        )
-
-        frames_data = []
-        for i, (score, path, enh_path) in enumerate(frame_results):
-            img_path = enh_path if enh_path else path
-            img = cv2.imread(img_path)
-            if img is None:
-                continue
-            _, buffer = cv2.imencode('.jpg', img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-            b64 = base64.b64encode(buffer).decode('utf-8')
-            frames_data.append({
-                "index": i + 1,
-                "score": round(score, 2),
-                "data": f"data:image/jpeg;base64,{b64}"
-            })
-            os.unlink(path)
-            if enh_path:
-                os.unlink(enh_path)
-
-        os.unlink(tmp_path)
-        return JSONResponse(content={"frames": frames_data})
-
+        # Save uploaded video
+        suffix = os.path.splitext(video.filename)[1] or ".mp4"
+        fd, temp_path = tempfile.mkstemp(suffix=suffix)
+        os.close(fd)
+        with open(temp_path, "wb") as f:
+            shutil.copyfileobj(video.file, f)
+        # Process with existing pipeline
+        result_path = extract_best_frame(temp_path)
+        # Cleanup temp video
+        os.unlink(temp_path)
+        return JSONResponse({"image_path": result_path})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Upload error: {e}")
+        raise HTTPException(500, str(e))
 
-
-@router.post("/reconstruct-from-parts")
-async def reconstruct_from_parts(images: list[UploadFile] = File(...)):
+# NEW endpoint for social media download
+@router.post("/download-video")
+async def download_video_from_url(request: Request):
     try:
-        temp_files = []
-        for img in images:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                shutil.copyfileobj(img.file, tmp)
-                temp_files.append(tmp.name)
+        data = await request.json()
+        url = data.get("url")
+        if not url:
+            raise HTTPException(400, "Missing 'url' field")
 
-        output_path = fuse_best_parts(temp_files)
+        # Download using yt-dlp
+        downloader = SocialMediaDownloader()
+        video_path, metadata = downloader.download_video(url)
 
-        for f in temp_files:
-            os.unlink(f)
+        # Pass to existing frame extraction function
+        image_path = extract_best_frame(video_path)
 
-        return Response(
-            content=open(output_path, "rb").read(),
-            media_type="image/jpeg"
-        )
+        # Cleanup downloaded video
+        downloader.cleanup(video_path)
 
+        # Return image path and metadata
+        return JSONResponse({
+            "image_path": image_path,
+            "video_info": metadata
+        })
+
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Download-video error: {e}")
+        raise HTTPException(500, f"Internal error: {str(e)}")
