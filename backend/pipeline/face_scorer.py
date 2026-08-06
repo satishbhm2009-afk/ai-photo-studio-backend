@@ -2,10 +2,10 @@ import cv2
 import numpy as np
 from typing import Tuple, Optional
 
-# ✅ Correct MediaPipe import pattern
-from mediapipe import solutions
-from mediapipe.solutions import face_detection as mp_face_detection
-from mediapipe.solutions import face_mesh as mp_face_mesh
+# ✅ Use the internal Python submodule path (works reliably)
+from mediapipe.python.solutions import face_detection as mp_face_detection
+from mediapipe.python.solutions import face_mesh as mp_face_mesh
+
 
 class FaceScorer:
     def __init__(self):
