@@ -1,17 +1,25 @@
 import cv2
 import numpy as np
-import mediapipe as mp
 from typing import Tuple, Optional
 
-mp_face_detection = mp.solutions.face_detection
-mp_face_mesh = mp.solutions.face_mesh
+# ✅ Correct MediaPipe import pattern
+from mediapipe import solutions
+from mediapipe.solutions import face_detection as mp_face_detection
+from mediapipe.solutions import face_mesh as mp_face_mesh
 
 class FaceScorer:
     def __init__(self):
-        self.detection = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
-        self.mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, min_detection_confidence=0.5)
+        self.detection = mp_face_detection.FaceDetection(
+            model_selection=0,
+            min_detection_confidence=0.5
+        )
+        self.mesh = mp_face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=1,
+            min_detection_confidence=0.5
+        )
 
-        # Face Mesh landmark indices
+        # Face Mesh landmark indices for eyes and mouth
         self.LEFT_EYE = [33, 133, 160, 158, 144, 153]
         self.RIGHT_EYE = [362, 263, 387, 385, 380, 373]
         self.MOUTH = [61, 291, 13, 14]
@@ -30,9 +38,11 @@ class FaceScorer:
             return 0.0, None
 
         # Take largest face
-        detection = max(detections.detections, key=lambda d: 
-                        d.location_data.relative_bounding_box.width *
-                        d.location_data.relative_bounding_box.height)
+        detection = max(
+            detections.detections,
+            key=lambda d: d.location_data.relative_bounding_box.width *
+                          d.location_data.relative_bounding_box.height
+        )
         bbox = detection.location_data.relative_bounding_box
         x, y = int(bbox.xmin * w), int(bbox.ymin * h)
         fw, fh = int(bbox.width * w), int(bbox.height * h)
@@ -108,4 +118,8 @@ class FaceScorer:
             return image
         center = (w // 2, h // 2)
         M = cv2.getRotationMatrix2D(center, angle, 1.0)
-        return cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+        return cv2.warpAffine(
+            image, M, (w, h),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_REPLICATE
+        )
