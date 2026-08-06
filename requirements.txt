@@ -1,13 +1,8 @@
-mediapipe==0.10.21
-opencv-python-headless
-numpy
 fastapi
 uvicorn
 python-multipart
-Pillowfastapi
-uvicorn
-opencv-python-headless
 numpy
-mediapipe
-python-multipart
+opencv-python-headless
+Pillow
+mediapipe==0.10.21
 yt-dlp
