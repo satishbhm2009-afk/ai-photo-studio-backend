@@ -1,16 +1,3 @@
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Install system dependencies for OpenCV
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "10000"]
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y opencv-contrib-python opencv-python 2>/dev/null || true \
+    && pip install --no-cache-dir "opencv-python-headless>=4.10,<4.13"
