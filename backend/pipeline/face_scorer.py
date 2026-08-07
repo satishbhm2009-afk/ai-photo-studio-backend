@@ -2,9 +2,14 @@ import cv2
 import numpy as np
 from typing import Tuple, Optional
 
-# ✅ Use the internal Python submodule path (works reliably)
-from mediapipe.python.solutions import face_detection as mp_face_detection
-from mediapipe.python.solutions import face_mesh as mp_face_mesh
+# Prefer the public API; fall back to the internal path used by some package builds
+try:
+    from mediapipe.python.solutions import face_detection as mp_face_detection
+    from mediapipe.python.solutions import face_mesh as mp_face_mesh
+except ImportError:
+    import mediapipe as mp
+    mp_face_detection = mp.solutions.face_detection
+    mp_face_mesh = mp.solutions.face_mesh
 
 
 class FaceScorer:
