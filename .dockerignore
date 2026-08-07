@@ -1,0 +1,14 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.venv
+venv
+env
+*.log
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.tmp
+.DS_Store
