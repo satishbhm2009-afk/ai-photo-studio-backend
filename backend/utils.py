@@ -3,17 +3,15 @@ import shutil
 import tempfile
 import hashlib
 import base64
-import logging
-from typing import List, Tuple, Optional
+from typing import List
 from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
 import io
 
-from backend.config import settings   # <-- FIXED: import settings
-
-logger = logging.getLogger(__name__)  # <-- FIXED: define logger
+from backend.config import settings
+from backend.logger import logger
 
 
 def get_temp_file(suffix: str = ".mp4") -> str:
@@ -59,7 +57,3 @@ def compute_hash(image: np.ndarray, hash_size: int = 8) -> str:
 
 def ensure_directory(path: str) -> None:
     Path(path).mkdir(parents=True, exist_ok=True)
-
-
-# Initialize temp dir
-ensure_directory(settings.TEMP_DIR)
