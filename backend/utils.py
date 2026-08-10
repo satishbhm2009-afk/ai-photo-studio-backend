@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import hashlib
 import base64
+import logging
 from typing import List, Tuple, Optional
 from pathlib import Path
 import cv2
@@ -10,11 +11,17 @@ import numpy as np
 from PIL import Image
 import io
 
+from backend.config import settings   # <-- FIXED: import settings
+
+logger = logging.getLogger(__name__)  # <-- FIXED: define logger
+
+
 def get_temp_file(suffix: str = ".mp4") -> str:
     """Create a temporary file with given suffix."""
     fd, path = tempfile.mkstemp(suffix=suffix, dir=settings.TEMP_DIR)
     os.close(fd)
     return path
+
 
 def cleanup_temp_files(paths: List[str]) -> None:
     """Safely delete temporary files and directories."""
@@ -28,6 +35,7 @@ def cleanup_temp_files(paths: List[str]) -> None:
             except Exception as e:
                 logger.warning(f"Cleanup failed for {p}: {e}")
 
+
 def image_to_base64(image: np.ndarray, format: str = "JPEG") -> str:
     """Convert OpenCV image (BGR) to base64 string."""
     if image.ndim == 3 and image.shape[2] == 3:
@@ -40,6 +48,7 @@ def image_to_base64(image: np.ndarray, format: str = "JPEG") -> str:
     pil_img.save(buffer, format=format)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
+
 def compute_hash(image: np.ndarray, hash_size: int = 8) -> str:
     """Perceptual hash (dHash) for duplicate detection."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -47,8 +56,10 @@ def compute_hash(image: np.ndarray, hash_size: int = 8) -> str:
     diff = resized[:, 1:] > resized[:, :-1]
     return hashlib.md5(diff.tobytes()).hexdigest()
 
+
 def ensure_directory(path: str) -> None:
     Path(path).mkdir(parents=True, exist_ok=True)
+
 
 # Initialize temp dir
 ensure_directory(settings.TEMP_DIR)
